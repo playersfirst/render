@@ -265,6 +265,7 @@ def update_cache():
 # ============================================================
 
 app = Flask(__name__)
+CORS(app)  # This enables CORS for all routes
 
 def background_updater():
     """Runs in background thread - updates cache every 60 seconds"""
