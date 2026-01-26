@@ -15,6 +15,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 from flask import Flask, send_file, jsonify
+from flask_cors import CORS
 
 # Configuration - Multiple API keys for rate limit distribution
 API_KEYS = [
