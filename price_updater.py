@@ -107,49 +107,39 @@ def encodeURIComponent(s):
     return urllib.parse.quote(s, safe='')
 
 def fetch_yahoo_price(symbol, max_time=15):
-    """Fetch price from Yahoo Finance via CORS proxy."""
+    """Fetch price from Yahoo Finance directly (no CORS proxy needed on backend)."""
     yahoo_url = f'https://query1.finance.yahoo.com/v8/finance/chart/{symbol}'
+    # We keep a simple retry loop in case of transient errors.
     start_time = time.time()
-    
-    proxy_templates = [
-        'https://api.allorigins.win/raw?url={url}',
-        'https://corsproxy.io/?{url}',
-        'https://thingproxy.freeboard.io/fetch/{url}',
-    ]
-    
-    attempt = 0
+    last_error = None
+
     while time.time() - start_time < max_time:
-        attempt += 1
-        proxies = [template.format(url=encodeURIComponent(yahoo_url)) for template in proxy_templates]
-        
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(proxies)) as executor:
-            futures = {
-                executor.submit(fetch_with_timeout, proxy_url, 5, False, None, True): proxy_url 
-                for proxy_url in proxies
-            }
-            
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    data = future.result()
-                    result = data['chart']['result'][0]
-                    meta = result['meta']
-                    price = meta['regularMarketPrice']
-                    
-                    if meta.get('regularMarketChangePercent') is not None:
-                        percentChange = meta['regularMarketChangePercent'] * 100
-                    elif meta.get('previousClose') and meta.get('regularMarketPrice'):
-                        percentChange = ((meta['regularMarketPrice'] - meta['previousClose']) / meta['previousClose']) * 100
-                    else:
-                        percentChange = 0
-                    
-                    return {'price': price, 'percentChange': percentChange}
-                except Exception:
-                    continue
-        
-        if attempt > 1:
-            time.sleep(random.uniform(0.2, 0.5))
-    
-    raise Exception(f"Timeout after {max_time}s for {symbol}")
+        try:
+            data = fetch_with_timeout(
+                yahoo_url,
+                timeout=5,
+                use_session=False,
+                headers=None,
+                use_browser_headers=True,
+            )
+            result = data['chart']['result'][0]
+            meta = result['meta']
+            price = meta['regularMarketPrice']
+
+            if meta.get('regularMarketChangePercent') is not None:
+                percentChange = meta['regularMarketChangePercent'] * 100
+            elif meta.get('previousClose') and meta.get('regularMarketPrice'):
+                percentChange = ((meta['regularMarketPrice'] - meta['previousClose']) / meta['previousClose']) * 100
+            else:
+                percentChange = 0
+
+            return {'price': price, 'percentChange': percentChange}
+        except Exception as e:
+            last_error = e
+            # small backoff before retrying
+            time.sleep(0.5)
+
+    raise Exception(f"Timeout after {max_time}s for {symbol}: {last_error}")
 
 def fetch_asset_price(symbol, config, max_time=15, api_key_index=0):
     """Fetch price for a single asset."""
@@ -205,7 +195,8 @@ def update_cache():
         if symbol in ASSET_CONFIGS:
             try:
                 return (symbol, fetch_asset_price(symbol, ASSET_CONFIGS[symbol], max_time=15, api_key_index=key_idx))
-            except Exception:
+            except Exception as e:
+                print(f"[DEBUG] {symbol} error: {e}")
                 return (symbol, None)
         return (symbol, None)
     
