@@ -200,23 +200,39 @@ def update_cache():
                 return (symbol, None)
         return (symbol, None)
     
+    # Split into non‑Yahoo (parallel) and Yahoo (sequential to avoid 429s)
     yahoo_symbols = [s for s in symbols if s in ASSET_CONFIGS and ASSET_CONFIGS[s]['use_yahoo']]
+    non_yahoo_symbols = [s for s in symbols if s not in yahoo_symbols]
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(symbols)) as executor:
-        futures = {}
-        for idx, symbol in enumerate(symbols):
-            delay = random.uniform(0, 0.5) if symbol in yahoo_symbols else 0
-            futures[executor.submit(fetch_asset_with_key, symbol, idx % len(API_KEYS), delay)] = symbol
-        
-        completed = 0
-        for future in concurrent.futures.as_completed(futures):
-            symbol, price_data = future.result()
-            if price_data:
-                cache_data['assets'][symbol] = price_data
-                completed += 1
-                print(f"  ✓ {symbol}: ${price_data['price']:.2f} ({price_data['percentChange']:+.2f}%) [{completed}/{len(symbols)}]")
-            else:
-                print(f"  ✗ {symbol}: Failed (will retry)")
+    completed = 0
+    
+    # Fetch non‑Yahoo symbols in parallel
+    if non_yahoo_symbols:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(non_yahoo_symbols)) as executor:
+            futures = {
+                executor.submit(fetch_asset_with_key, symbol, idx % len(API_KEYS)): symbol
+                for idx, symbol in enumerate(non_yahoo_symbols)
+            }
+            
+            for future in concurrent.futures.as_completed(futures):
+                symbol, price_data = future.result()
+                if price_data:
+                    cache_data['assets'][symbol] = price_data
+                    completed += 1
+                    print(f"  ✓ {symbol}: ${price_data['price']:.2f} ({price_data['percentChange']:+.2f}%) [{completed}/{len(symbols)}]")
+                else:
+                    print(f"  ✗ {symbol}: Failed (will retry)")
+
+    # Fetch Yahoo symbols sequentially with a delay to be gentle with rate limits
+    for symbol in yahoo_symbols:
+        symbol, price_data = fetch_asset_with_key(symbol, 0)
+        if price_data:
+            cache_data['assets'][symbol] = price_data
+            completed += 1
+            print(f"  ✓ {symbol}: ${price_data['price']:.2f} ({price_data['percentChange']:+.2f}%) [{completed}/{len(symbols)}]")
+        else:
+            print(f"  ✗ {symbol}: Failed (will retry)")
+        time.sleep(1.0)
     
     # Retry missing assets
     if len(cache_data['assets']) < len(symbols):
@@ -310,13 +326,13 @@ def status():
         return jsonify({"status": "error", "error": str(e)}), 500
 
 if __name__ == '__main__':
-    # Start background updater thread
-    updater_thread = threading.Thread(target=background_updater, daemon=True)
-    updater_thread.start()
-    
-    # Run initial update before starting server
+    # Run initial update before starting background thread and server
     print("🔄 Running initial cache update...")
     update_cache()
+
+    # Start background updater thread (runs after initial update finishes)
+    updater_thread = threading.Thread(target=background_updater, daemon=True)
+    updater_thread.start()
     
     # Start Flask server
     # Render uses PORT environment variable, default to 10000 for local testing
