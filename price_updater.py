@@ -106,6 +106,26 @@ def encodeURIComponent(s):
     import urllib.parse
     return urllib.parse.quote(s, safe='')
 
+def yahoo_percent_change(meta):
+    """
+    Daily percent change in percent units (e.g. -0.286 for -0.286%).
+
+    Yahoo's regularMarketChangePercent is already a percent, matching Finnhub's dp.
+    Do not multiply by 100 — that produced 24h values like -28.6% / -53.6% for LSE ETFs.
+    Prefer previousClose so the definition matches Finnhub even if Yahoo's field units drift.
+    """
+    price = meta.get('regularMarketPrice')
+    prev = meta.get('previousClose') or meta.get('chartPreviousClose')
+    if price and prev:
+        return ((price - prev) / prev) * 100
+
+    change_pct = meta.get('regularMarketChangePercent')
+    if change_pct is not None:
+        return change_pct
+
+    return 0
+
+
 def fetch_yahoo_price(symbol, max_time=15):
     """Fetch price from Yahoo Finance directly (no CORS proxy needed on backend)."""
     yahoo_url = f'https://query1.finance.yahoo.com/v8/finance/chart/{symbol}'
@@ -125,13 +145,7 @@ def fetch_yahoo_price(symbol, max_time=15):
             result = data['chart']['result'][0]
             meta = result['meta']
             price = meta['regularMarketPrice']
-
-            if meta.get('regularMarketChangePercent') is not None:
-                percentChange = meta['regularMarketChangePercent'] * 100
-            elif meta.get('previousClose') and meta.get('regularMarketPrice'):
-                percentChange = ((meta['regularMarketPrice'] - meta['previousClose']) / meta['previousClose']) * 100
-            else:
-                percentChange = 0
+            percentChange = yahoo_percent_change(meta)
 
             return {'price': price, 'percentChange': percentChange}
         except Exception as e:
